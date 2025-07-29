@@ -1,0 +1,135 @@
+import simpy
+import random
+import math
+import numpy as np
+
+# Define parameters
+NUM_STORES = 5
+SERVICE_AREA_SIZE =   6# km x km service area
+NUM_SKUS = 10
+LAMBDA_WALKIN_PER_STORE_PER_DAY = 100  # Walk-in customers per store per day
+LAMBDA_ONLINE_PER_DAY = 200  # Online orders per day
+PICKING_TIME_MEAN = 5 / 60  # Mean picking time (5 minutes in hours)
+DELIVERY_SPEED = 15  # Delivery speed (km/h)
+RESTOCK_INTERVAL = 24  # Restocking interval (hours)
+SIMULATION_DURATION = 30 * 24  # Simulation duration (30 days in hours)
+SAFETY_STOCK_FACTOR = 0.2  # Safety stock as 20% of forecasted demand
+FORECAST_HISTORY = 7  # Use last 7 days for forecasting
+INITIAL_INVENTORY = 100  # Initial inventory per SKU per store
+SALES_INCREASE_FACTOR = 1.10  # 10% sales increase due to quick commerce
+
+# Define store locations (example locations within service area)
+store_locations = [(2,2), (2,8), (8,2), (8,8), (5,5)]
+
+# Initialize stores
+stores = []
+for i, loc in enumerate(store_locations):
+    store = {
+        'id': i,
+        'location': loc,
+        'inventory': {sku: INITIAL_INVENTORY for sku in range(1, NUM_SKUS+1)},
+        'sales_today': {sku: 0 for sku in range(1, NUM_SKUS+1)},
+        'daily_sales': {sku: [] for sku in range(1, NUM_SKUS+1)},
+        'picker': simpy.Resource(env=env, capacity=1)  # Each store has one picker
+    }
+    stores.append(store)
+
+# Define functions
+def distance(loc1, loc2):
+    """Calculate Euclidean distance between two points."""
+    return math.sqrt((loc1[0] - loc2[0])**2 + (loc1[1] - loc2[1])**2)
+
+def find_nearest_store_with_stock(location, sku, quantity):
+    """Find the nearest store with sufficient stock for the requested SKU."""
+    min_dist = float('inf')
+    nearest_store = None
+    for store in stores:
+        if store['inventory'].get(sku, 0) >= quantity:
+            dist = distance(store['location'], location)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_store = store
+    return nearest_store
+
+# Simulation processes
+def walkin_generator(env, store):
+    """Generate walk-in customers for a store."""
+    global lost_walkin
+    while True:
+        yield env.timeout(random.expovariate(LAMBDA_WALKIN_PER_STORE_PER_DAY / 24))
+        sku = random.randint(1, NUM_SKUS)
+        if store['inventory'].get(sku, 0) > 0:
+            store['inventory'][sku] -= 1
+            store['sales_today'][sku] += 1
+        else:
+            lost_walkin += 1
+
+def online_generator(env):
+    """Generate online orders from random locations."""
+    global lost_online, total_fulfillment_time, total_online
+    while True:
+        yield env.timeout(random.expovariate(LAMBDA_ONLINE_PER_DAY / 24))
+        order_start_time = env.now
+        location = (random.uniform(0, SERVICE_AREA_SIZE), random.uniform(0, SERVICE_AREA_SIZE))
+        sku = random.randint(1, NUM_SKUS)
+        store = find_nearest_store_with_stock(location, sku, 1)
+        if store:
+            store['inventory'][sku] -= 1
+            store['sales_today'][sku] += 1
+            # Start picking
+            with store['picker'].request() as req:
+                yield req
+                picking_time = random.expovariate(1 / PICKING_TIME_MEAN)
+                yield env.timeout(picking_time)
+                # Start delivery
+                dist = distance(store['location'], location)
+                delivery_time = dist / DELIVERY_SPEED
+                yield env.timeout(delivery_time)
+                # Order delivered
+                total_fulfillment_time += env.now - order_start_time
+                total_online += 1
+        else:
+            lost_online += 1
+
+def restocker(env, store):
+    """Restock inventory daily based on forecasted demand."""
+    while True:
+        yield env.timeout(RESTOCK_INTERVAL)
+        for sku in range(1, NUM_SKUS+1):
+            # Record today's sales
+            store['daily_sales'][sku].append(store['sales_today'][sku])
+            store['sales_today'][sku] = 0
+            # Compute forecast
+            history = store['daily_sales'][sku][-FORECAST_HISTORY:]
+            if history:
+                forecast = sum(history) / len(history) * SALES_INCREASE_FACTOR
+            else:
+                forecast = 0
+            safety_stock = SAFETY_STOCK_FACTOR * forecast
+            target = forecast + safety_stock
+            Q = max(0, target - store['inventory'][sku])
+            store['inventory'][sku] += Q
+
+# Main simulation
+env = simpy.Environment()
+lost_walkin = 0
+lost_online = 0
+total_fulfillment_time = 0
+total_online = 0
+
+# Start processes
+for store in stores:
+    env.process(walkin_generator(env, store))
+    env.process(restocker(env, store))
+env.process(online_generator(env))
+
+# Run simulation
+env.run(until=SIMULATION_DURATION)
+
+# Print results
+print(f"Lost walk-in sales: {lost_walkin}")
+print(f"Lost online sales: {lost_online}")
+if total_online > 0:
+    print(f"Average fulfillment time: {total_fulfillment_time / total_online} hours")
+else:
+    print("No online orders were fulfilled.")
