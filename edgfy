@@ -1,0 +1,111 @@
+import simpy
+import random
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Simulation parameters
+SIM_TIME = 24 * 60  # Simulate for 24 hours (in minutes)
+ORDER_RATE = 10  # Average time between orders (minutes)
+PROCESSING_TIME = 5  # Time to process and pack an order (minutes)
+DELIVERY_TIME_MIN = 30  # Minimum delivery time (minutes)
+DELIVERY_TIME_MAX = 120  # Maximum delivery time (minutes)
+REPLACEMENT_RATE = 0.1  # 10% of orders require replacement or refund
+INVENTORY_CAPACITY = 1000  # Initial inventory capacity (SKUs)
+RESTOCK_THRESHOLD = 200  # Restock when inventory falls below this
+RESTOCK_AMOUNT = 300  # Amount to restock
+
+# Data collection
+order_data = []
+
+class RetailStore:
+    def __init__(self, env, inventory_capacity):
+        self.env = env
+        self.inventory = inventory_capacity
+        self.orders_processed = 0
+        self.orders_delivered = 0
+        self.replacements = 0
+        self.refunds = 0
+
+    def process_order(self, order_id):
+        yield self.env.timeout(PROCESSING_TIME)
+        if self.inventory > 0:
+            self.inventory -= 1
+            self.orders_processed += 1
+            return True
+        return False
+
+    def restock(self):
+        if self.inventory < RESTOCK_THRESHOLD:
+            print(f"Time {self.env.now:.2f}: Restocking inventory")
+            self.inventory += RESTOCK_AMOUNT
+
+def customer_order(env, store, order_id):
+    print(f"Time {env.now:.2f}: Order {order_id} placed")
+    order_data.append({
+        'order_id': order_id,
+        'placement_time': env.now,
+        'status': 'placed'
+    })
+    
+    # Process order at store
+    success = yield env.process(store.process_order(order_id))
+    if success:
+        order_data[-1]['status'] = 'processed'
+        print(f"Time {env.now:.2f}: Order {order_id} processed")
+        
+        # Delivery
+        delivery_time = random.uniform(DELIVERY_TIME_MIN, DELIVERY_TIME_MAX)
+        yield env.timeout(delivery_time)
+        store.orders_delivered += 1
+        order_data[-1]['status'] = 'delivered'
+        order_data[-1]['delivery_time'] = env.now
+        print(f"Time {env.now:.2f}: Order {order_id} delivered")
+        
+        # Handle replacements or refunds
+        if random.random() < REPLACEMENT_RATE:
+            if random.random() < 0.5:
+                store.replacements += 1
+                order_data[-1]['status'] = 'replacement'
+                print(f"Time {env.now:.2f}: Order {order_id} requires replacement")
+                env.process(customer_order(env, store, f"{order_id}_replacement"))
+            else:
+                store.refunds += 1
+                order_data[-1]['status'] = 'refunded'
+                print(f"Time {env.now:.2f}: Order {order_id} refunded")
+    else:
+        order_data[-1]['status'] = 'failed'
+        print(f"Time {env.now:.2f}: Order {order_id} failed due to low inventory")
+    
+    store.restock()
+
+def order_generator(env, store):
+    order_id = 1
+    while True:
+        yield env.timeout(random.expovariate(1.0 / ORDER_RATE))
+        env.process(customer_order(env, store, order_id))
+        order_id += 1
+
+# Run simulation
+env = simpy.Environment()
+store = RetailStore(env, INVENTORY_CAPACITY)
+env.process(order_generator(env, store))
+env.run(until=SIM_TIME)
+
+# Analyze results
+df = pd.DataFrame(order_data)
+delivery_times = df[df['status'] == 'delivered']['delivery_time'] - df[df['status'] == 'delivered']['placement_time']
+
+# Plot delivery times
+plt.hist(delivery_times, bins=20, color='skyblue', edgecolor='black')
+plt.title('Distribution of Delivery Times')
+plt.xlabel('Delivery Time (minutes)')
+plt.ylabel('Number of Orders')
+plt.show()
+
+# Summary statistics
+print(f"Total orders processed: {store.orders_processed}")
+print(f"Total orders delivered: {store.orders_delivered}")
+print(f"Total replacements: {store.replacements}")
+print(f"Total refunds: {store.refunds}")
+print(f"Average delivery time: {delivery_times.mean():.2f} minutes" if not delivery_times.empty else "No deliveries")
+print(f"Final inventory level: {store.inventory}")
