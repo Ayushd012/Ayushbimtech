@@ -1,0 +1,33 @@
+import pandas as pd
+import numpy as np
+
+# 🗃️ Historical SKU-level sales data (simulated for 5 years)
+years = ['2019', '2020', '2021', '2022', '2023']
+skus = ['Nike-AirMax-White-UK9', 'HM-Denim-Jacket-M', 'ForestEssential-RoseCream']
+sales_data = {
+    sku: np.random.randint(1000, 2500, size=len(years)) for sku in skus
+}
+sales_df = pd.DataFrame(sales_data, index=years)
+
+# 📈 Projected 10% uplift in Year 1 for retail store post Q-commerce integration
+retail_growth_rate = 0.10
+sales_df.loc['2024'] = sales_df.loc['2023'] * (1 + retail_growth_rate)
+
+# 📦 Assume Q-commerce contributes 10% of projected retail sales
+q_commerce_share = 0.10
+q_commerce_sales_2024 = sales_df.loc['2024'] * q_commerce_share
+
+# 🧠 Inventory optimization using AI (simple mock logic here)
+# Prioritize SKUs with consistent upward trend & high average sales
+sku_trend_score = sales_df[years].apply(lambda x: np.polyfit(range(len(x)), x, 1)[0])
+average_sales = sales_df[years].mean()
+priority_score = sku_trend_score * 0.6 + average_sales * 0.4
+recommended_skus = priority_score.sort_values(ascending=False).head(2)
+
+# 📊 Output Summary
+print("📊 Projected Sales in 2024:")
+print(sales_df.loc['2024'])
+print("\n🚚 Q-Commerce Contribution in 2024:")
+print(q_commerce_sales_2024)
+print("\n🔎 Recommended SKUs for Q-Commerce Optimization:")
+print(recommended_skus)
